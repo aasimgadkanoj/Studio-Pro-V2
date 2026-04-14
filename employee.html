@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0">
+    <title>Employee Portal | Studio Pro</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: { extend: { fontFamily: { sans: ['"Plus Jakarta Sans"', 'sans-serif'] } } }
+        }
+        if (localStorage.getItem('theme') === 'dark') document.documentElement.classList.add('dark');
+    </script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, setPersistence, browserSessionPersistence } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+        import { getFirestore, collection, query, where, onSnapshot, updateDoc, doc, orderBy, getDocs } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyAedDexfDCfGv33sf2xDUl4UwhuvyhkNsU",
+            authDomain: "my-studio-app-new.firebaseapp.com",
+            projectId: "my-studio-app-new",
+            storageBucket: "my-studio-app-new.firebasestorage.app",
+            messagingSenderId: "868951933940",
+            appId: "1:868951933940:web:1dceda342cc44c7c94afa1"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        setPersistence(auth, browserSessionPersistence);
+        const db = getFirestore(app);
+
+        let currentUserEmail = "";
+        let myOwnerId = ""; 
+        let currentUserName = ""; // NAYA: Naam save karne ke liye
+
+        window.showInfoAlert = (message) => {
+            document.getElementById('infoAlertMessage').innerText = message;
+            document.getElementById('infoAlertModal').classList.remove('hidden');
+            document.getElementById('infoAlertModal').classList.add('flex');
+        };
+
+        window.closeInfoAlert = () => {
+            document.getElementById('infoAlertModal').classList.add('hidden');
+            document.getElementById('infoAlertModal').classList.remove('flex');
+        };
+
+        window.toggleSidebar = () => {
+            document.getElementById('sidebar').classList.toggle('-translate-x-full');
+            document.getElementById('sidebarOverlay').classList.toggle('hidden');
+        };
+
+        window.toggleTheme = () => {
+            const isDark = document.documentElement.classList.toggle('dark');
+            localStorage.setItem('theme', isDark ? 'dark' : 'light');
+        };
+
+        onAuthStateChanged(auth, async (user) => {
+            const authScreen = document.getElementById('authScreen');
+            const appWrapper = document.getElementById('appContentWrapper');
+            const emailDisplay = document.getElementById('userEmailDisplay');
+            const loginBtn = document.getElementById('loginBtnText');
+
+            if (user) {
+                currentUserEmail = user.email.toLowerCase().trim();
+                
+                try {
+                    const q = query(collection(db, "staff"), where("email", "==", currentUserEmail));
+                    const querySnapshot = await getDocs(q);
+
+                    if (!querySnapshot.empty) {
+                        myOwnerId = querySnapshot.docs[0].data().ownerId;
+                        currentUserName = querySnapshot.docs[0].data().name; // Naam nikal liya
+                        
+                        authScreen.classList.add('hidden');
+                        appWrapper.classList.remove('hidden');
+                        emailDisplay.innerText = currentUserEmail;
+                        
+                        loadTasks(myOwnerId); 
+                        if(loginBtn) loginBtn.innerText = "Access Workspace";
+                    } else {
+                        showInfoAlert("ACCESS DENIED: You are an Admin or have been removed.");
+                        signOut(auth);
+                        if(loginBtn) loginBtn.innerText = "Access Workspace";
+                    }
+                } catch (error) {
+                    showInfoAlert("Error verifying access. Please try again.");
+                    signOut(auth);
+                    if(loginBtn) loginBtn.innerText = "Access Workspace";
+                }
+            } else {
+                authScreen.classList.remove('hidden');
+                appWrapper.classList.add('hidden');
+            }
+        });
+
+        window.handleAuth = async (event) => {
+            event.preventDefault();
+            const loginBtn = document.getElementById('loginBtnText');
+            const originalText = loginBtn.innerText;
+            const email = document.getElementById('email').value.trim();
+            const pass = document.getElementById('pass').value.trim();
+            
+            if (!email || !pass) return showInfoAlert("Please enter credentials!");
+            loginBtn.innerText = "VERIFYING...";
+            try {
+                await signInWithEmailAndPassword(auth, email, pass);
+            } catch (err) { 
+                loginBtn.innerText = originalText;
+                showInfoAlert("Login Failed: Access Denied or Invalid Credentials.");
+            }
+        };
+
+        window.logout = () => signOut(auth);
+
+        function getDeadlineBadge(dateStr) {
+            if (!dateStr) return "";
+            const parts = dateStr.split('-');
+            const target = new Date(parts[0], parts[1] - 1, parts[2]); 
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const diffDays = Math.round((target - today) / (1000 * 60 * 60 * 24));
+
+            if (diffDays < 0) return `<span class="text-red-600 font-black animate-pulse">[ OVERDUE ]</span>`;
+            if (diffDays === 0) return `<span class="text-red-500 font-black animate-bounce">[ TODAY ]</span>`;
+            if (diffDays === 1) return `<span class="text-orange-500 font-bold">[ TOMORROW ]</span>`;
+            if (diffDays <= 3) return `<span class="text-orange-400 font-bold">[ ${diffDays} days left ]</span>`;
+            return "";
+        }
+
+        function loadTasks(ownerId) {
+            const q = query(collection(db, "orders"), where("uid", "==", ownerId), orderBy("createdAt", "desc"));
+            
+            onSnapshot(q, (snapshot) => {
+                let poolHtml = '';
+                let myTasksHtml = '';
+
+                snapshot.forEach((docSnap) => {
+                    const o = docSnap.data();
+                    o.id = docSnap.id;
+                    const displayDate = new Date(o.createdAt).toLocaleDateString('en-GB', {day:'numeric', month:'short'});
+                    const remarksHTML = o.remarks ? `<p class="text-[10px] text-amber-600 dark:text-amber-500 mt-1.5 font-bold italic bg-amber-50 dark:bg-amber-900/20 p-1.5 rounded-lg inline-block"><i class="fas fa-comment-dots"></i> ${o.remarks}</p>` : '';
+
+                    // POOL TASKS
+                    if (o.status === 'Pending' && (!o.assignedTo || o.assignedTo === "")) {
+                        poolHtml += `
+                        <div class="bg-white dark:bg-zinc-800 p-5 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-700 flex justify-between items-center transition-all hover:border-blue-500">
+                            <div>
+                                <h3 class="font-bold text-slate-800 dark:text-white">${o.jobType || 'Project Folder'}</h3>
+                                <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Client: <strong>${o.name}</strong></p>
+                                <p class="text-[10px] text-slate-400 mt-1"><i class="far fa-calendar-alt"></i> Deadline: ${o.deadline} ${getDeadlineBadge(o.deadline)}</p>
+                                ${remarksHTML}
+                            </div>
+                            <button onclick="claimTask('${o.id}')" class="bg-blue-600 hover:bg-blue-700 text-white font-black text-[10px] uppercase tracking-widest px-4 py-2.5 rounded-xl shadow-lg transition-all active:scale-95">Take Job</button>
+                        </div>`;
+                    }
+
+                    // MY WORKSPACE TASKS
+                    if ((o.status === 'Editing' || o.status === 'Printing') && o.assignedTo === currentUserEmail) {
+                        myTasksHtml += `
+                        <div class="bg-blue-50 dark:bg-blue-900/10 p-5 rounded-2xl shadow-sm border-2 border-blue-200 dark:border-blue-800/50 flex justify-between items-center">
+                            <div>
+                                <div class="flex items-center gap-2 mb-1">
+                                    <span class="bg-blue-500 text-white text-[9px] px-2 py-0.5 rounded-md font-black uppercase tracking-widest animate-pulse">Working</span>
+                                </div>
+                                <h3 class="font-bold text-slate-800 dark:text-white">${o.jobType || 'Project Folder'}</h3>
+                                <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Client: <strong>${o.name}</strong></p>
+                                <p class="text-[10px] text-slate-400 mt-1"><i class="far fa-calendar-alt"></i> Deadline: ${o.deadline} ${getDeadlineBadge(o.deadline)}</p>
+                                ${remarksHTML}
+                            </div>
+                            <div class="flex gap-2">
+                                <button onclick="dropTask('${o.id}')" class="bg-white dark:bg-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-700 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700 font-black text-[10px] uppercase tracking-widest px-4 py-2.5 rounded-xl shadow-sm transition-all active:scale-95"><i class="fas fa-times"></i> Drop</button>
+                                <button onclick="markCompleted('${o.id}')" class="bg-green-500 hover:bg-green-600 text-white font-black text-[10px] uppercase tracking-widest px-4 py-2.5 rounded-xl shadow-lg transition-all active:scale-95"><i class="fas fa-check"></i> Done</button>
+                            </div>
+                        </div>`;
+                    }
+                });
+
+                document.getElementById('taskPoolList').innerHTML = poolHtml || '<p class="text-sm text-slate-400 italic p-4 text-center">No new tasks available in the pool.</p>';
+                document.getElementById('myWorkspaceList').innerHTML = myTasksHtml || '<p class="text-sm text-slate-400 italic p-4 text-center">You have no active tasks. Take a job from the pool!</p>';
+            });
+        }
+
+        // NAYA: Claim task update kiya gaya taaki timer start ho sake
+        window.claimTask = async (id) => {
+            try {
+                await updateDoc(doc(db, "orders", id), { 
+                    status: 'Editing', 
+                    assignedTo: currentUserEmail,
+                    workerName: currentUserName, // Admin panel ko naam bhi jayega
+                    startTime: Date.now() // Live timer ke liye
+                });
+            } catch(e) { showInfoAlert("Failed to claim task!"); }
+        };
+
+        let taskToDropId = null;
+
+window.dropTask = (id) => {
+    taskToDropId = id;
+    const modal = document.getElementById('dropConfirmModal');
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+};
+
+window.closeDropModal = () => {
+    taskToDropId = null;
+    const modal = document.getElementById('dropConfirmModal');
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+};
+
+// Confirm button click hone par asli drop logic chale
+document.getElementById('confirmDropBtn').onclick = async () => {
+    if(taskToDropId) {
+        try {
+            const orderRef = doc(db, "orders", taskToDropId);
+            await updateDoc(orderRef, {
+                status: "Pending",
+                assignedTo: "",
+                startTime: null
+            });
+            closeDropModal();
+            // Yahan chaho toh ek success alert dikha sakte ho
+        } catch (error) {
+            console.error("Error dropping task:", error);
+        }
+    }
+};  
+
+        window.markCompleted = async (id) => {
+            if(!confirm("Are you sure this task is 100% complete?")) return;
+            try {
+                await updateDoc(doc(db, "orders", id), { 
+                    status: 'Completed',
+                    completedAt: Date.now() 
+                });
+            } catch(e) { showInfoAlert("Failed to update status!"); }
+        };
+
+        window.addEventListener("load", () => {
+            const theme = localStorage.getItem("theme");
+            if (theme === 'dark') document.documentElement.classList.add('dark');
+        });
+    </script>
+</head>
+<body class="bg-slate-50 dark:bg-black font-sans h-[100dvh] w-full flex overflow-hidden transition-colors duration-300">
+
+<div id="authScreen" class="fixed inset-0 bg-slate-950 z-[2000] overflow-y-auto">
+    <div class="min-h-[100dvh] flex items-center justify-center p-4">
+        <form onsubmit="window.handleAuth(event)" class="bg-white dark:bg-zinc-900 p-8 rounded-3xl w-full max-w-sm text-center shadow-2xl border-t-8 border-indigo-600 m-auto">
+            <h2 class="text-2xl font-black mb-2 uppercase dark:text-white italic tracking-tighter">Studio Pro</h2>
+            <p class="text-[10px] text-slate-500 mb-8 font-black uppercase tracking-[0.2em] border-b pb-4 dark:border-slate-800">Team Workspace</p>
+            <div class="space-y-3">
+                <input type="email" id="email" required placeholder="Employee Email" class="w-full p-4 bg-slate-50 dark:bg-zinc-800 dark:text-white border-none rounded-2xl outline-none ring-1 ring-slate-200 dark:ring-slate-700 focus:ring-2 focus:ring-indigo-500 transition-all font-medium text-sm">
+                <input type="password" id="pass" required placeholder="Access Key" class="w-full p-4 bg-slate-50 dark:bg-zinc-800 dark:text-white border-none rounded-2xl outline-none ring-1 ring-slate-200 dark:ring-slate-700 focus:ring-2 focus:ring-indigo-500 transition-all font-medium text-sm">
+            </div>
+            <button type="submit" id="loginBtnText" class="w-full mt-6 bg-indigo-600 text-white font-black py-4 rounded-2xl text-[10px] uppercase tracking-widest shadow-xl active:scale-95 transition-transform border-b-4 border-indigo-800">Access Portal</button>
+            <p class="mt-8 text-[9px] text-slate-400 font-bold uppercase tracking-widest italic">Authorized Personnel Only</p>
+        </form>
+    </div>
+</div>
+
+<div id="sidebarOverlay" onclick="toggleSidebar()" class="fixed inset-0 bg-black/60 z-[1000] hidden backdrop-blur-sm transition-all lg:hidden"></div>
+
+<aside id="sidebar" class="fixed inset-y-0 left-0 bg-slate-900 dark:bg-zinc-950 text-slate-400 w-64 transform -translate-x-full lg:translate-x-0 transition-transform duration-300 z-[1001] flex flex-col shadow-2xl border-r border-slate-800">
+    <div class="p-8 border-b border-slate-800 text-center">
+        <h2 class="text-white font-black text-xl italic uppercase tracking-tighter">Studio Pro <span class="text-indigo-500 text-xs">TEAM</span></h2>
+    </div>
+    <nav class="flex-1 px-4 py-8 space-y-2">
+        <div class="pb-2 text-[10px] uppercase font-black tracking-widest text-slate-600 px-3 italic">My Account</div>
+        <button onclick="toggleTheme()" class="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-slate-800 hover:text-white transition-all text-xs font-bold uppercase tracking-wider">
+            <i class="fas fa-adjust w-5"></i> Appearance
+        </button>
+        <button onclick="logout()" class="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-red-500/10 hover:text-red-500 transition-all text-xs font-bold uppercase mt-4">
+            <i class="fas fa-power-off w-5"></i> Sign Out
+        </button>
+    </nav>
+    <div class="p-6 border-t border-slate-800 text-center bg-black/20">
+        <p id="userEmailDisplay" class="text-[9px] font-black uppercase tracking-widest text-slate-500 truncate"></p>
+    </div>
+</aside>
+
+<div id="appContentWrapper" class="hidden flex-1 w-full flex flex-col h-[100dvh] lg:ml-64 transition-all duration-300 bg-slate-50 dark:bg-black relative">
+    
+    <nav class="bg-white dark:bg-zinc-900 p-4 border-b dark:border-slate-800 flex justify-between items-center sticky top-0 z-50 shadow-sm">
+        <div class="flex items-center gap-3">
+            <button onclick="toggleSidebar()" class="lg:hidden text-slate-600 dark:text-slate-400 p-2"><i class="fas fa-bars"></i></button>
+            <h1 class="font-black text-slate-800 dark:text-white tracking-tighter text-xl uppercase italic">Job Board</h1>
+        </div>
+        <div class="bg-indigo-50 dark:bg-indigo-900/30 px-3 py-1.5 rounded-xl border border-indigo-100 dark:border-indigo-800">
+            <span class="text-[9px] font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest"><i class="fas fa-circle text-[6px] mr-1 animate-pulse"></i> System Live</span>
+        </div>
+    </nav>
+
+    <main class="flex-1 overflow-y-auto p-4 lg:p-10 dark:text-slate-300">
+        <div class="max-w-5xl mx-auto space-y-12 pb-20">
+            
+            <section>
+                <div class="flex items-center justify-between mb-6">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-full bg-indigo-600 flex items-center justify-center text-white shadow-lg shadow-indigo-500/20">
+                            <i class="fas fa-laptop-code text-sm"></i>
+                        </div>
+                        <h2 class="text-sm font-black uppercase tracking-[0.2em] text-slate-800 dark:text-white italic">Active Workspace</h2>
+                    </div>
+                </div>
+                <div id="myWorkspaceList" class="space-y-4">
+                    </div>
+            </section>
+
+            <section>
+                <div class="flex items-center gap-3 mb-6 pt-4 border-t dark:border-slate-800">
+                    <div class="w-10 h-10 rounded-full bg-slate-200 dark:bg-zinc-800 flex items-center justify-center text-slate-500 dark:text-slate-400">
+                        <i class="fas fa-layer-group text-sm"></i>
+                    </div>
+                    <h2 class="text-sm font-black uppercase tracking-[0.2em] text-slate-800 dark:text-white italic">Available Pool</h2>
+                </div>
+                <div id="taskPoolList" class="grid grid-cols-1 md:grid-cols-2 gap-5">
+                    </div>
+            </section>
+
+        </div>
+    </main>
+</div>
+
+<div id="infoAlertModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-[6000] hidden items-center justify-center p-4">
+    <div class="bg-white dark:bg-zinc-900 w-full max-w-sm rounded-[2.5rem] p-8 shadow-2xl animate-in zoom-in duration-300 border border-slate-100 dark:border-slate-800 text-center">
+        <div class="w-16 h-16 bg-indigo-100 dark:bg-indigo-900/40 rounded-full flex items-center justify-center mx-auto mb-4">
+            <i class="fas fa-info-circle text-indigo-600 dark:text-indigo-400 text-2xl"></i>
+        </div>
+        <h3 class="font-black text-slate-800 dark:text-white mb-2 text-lg uppercase italic">System Message</h3>
+        <p id="infoAlertMessage" class="text-sm text-slate-500 dark:text-slate-400 mb-8 font-medium leading-relaxed"></p>
+        <button onclick="closeInfoAlert()" class="w-full py-4 bg-indigo-600 text-white font-black rounded-2xl text-[10px] uppercase tracking-widest shadow-xl shadow-indigo-500/20 active:scale-95 transition-all">Understood</button>
+    </div>
+</div>
+<div id="dropConfirmModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-[5000] hidden items-center justify-center p-4">
+    <div class="bg-white dark:bg-zinc-900 w-full max-w-sm rounded-[2rem] p-6 shadow-2xl animate-in zoom-in duration-300 border border-slate-100 dark:border-slate-800">
+        <div class="w-16 h-16 bg-red-100 dark:bg-red-900/30 rounded-full flex items-center justify-center mb-4 mx-auto">
+            <i class="fas fa-exclamation-triangle text-red-600 dark:text-red-500 text-2xl"></i>
+        </div>
+        <h3 class="font-bold text-slate-800 dark:text-white mb-2 text-lg text-center">Drop this task?</h3>
+        <p class="text-sm text-slate-600 dark:text-slate-400 mb-8 font-medium text-center">Are you sure? It will go back to the available pool for others.</p>
+        <div class="flex flex-col gap-3">
+            <button id="confirmDropBtn" class="w-full py-3.5 bg-red-600 text-white font-bold rounded-2xl text-sm shadow-lg shadow-red-500/20 hover:bg-red-700 transition-all uppercase tracking-widest">Yes, Drop Task</button>
+            <button onclick="closeDropModal()" class="w-full py-3.5 bg-slate-100 dark:bg-zinc-800 text-slate-500 dark:text-slate-400 font-bold rounded-2xl text-sm hover:bg-slate-200 transition-all uppercase tracking-widest">Cancel</button>
+        </div>
+    </div>
+</div>
+</body>
+</html>
